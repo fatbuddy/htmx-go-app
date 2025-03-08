@@ -24,4 +24,8 @@ go.work
 *.swo
 
 # Environment variables
-.env 
+.env
+
+# Air temporary files
+tmp/
+build-errors.log 

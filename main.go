@@ -57,7 +57,11 @@ func main() {
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
-	templates.ExecuteTemplate(w, "index.html", nil)
+	err := templates.ExecuteTemplate(w, "layout.html", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func handleMessage(w http.ResponseWriter, r *http.Request) {
