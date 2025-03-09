@@ -48,7 +48,6 @@ A modern web application built with Go, HTMX, and MongoDB, featuring user authen
 
 - Go 1.16 or higher
 - MongoDB 4.4 or higher
-- Node.js (for Tailwind CSS)
 
 ## Setup
 
