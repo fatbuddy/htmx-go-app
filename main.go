@@ -8,13 +8,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"goji.io"
-	"goji.io/pat"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -79,21 +78,13 @@ func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, _ := store.Get(r, "session-name")
-
-		// Get the authenticated value from session
-		authValue, exists := session.Values["authenticated"]
-		if !exists {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+		auth, ok := session.Values["authenticated"].(bool)
+		if !ok || !auth {
+			w.Header().Set("HX-Reswap", "innerHTML")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<div class="text-red-500">Please login first</div>`))
 			return
 		}
-
-		// Try to convert to boolean
-		isAuthenticated, ok := authValue.(bool)
-		if !ok || !isAuthenticated {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
 		next.ServeHTTP(w, r)
 	})
 }
@@ -102,67 +93,37 @@ func requireAuth(next http.Handler) http.Handler {
 func requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, _ := store.Get(r, "session-name")
-		userID, ok := session.Values["user_id"].(string)
-		if !ok {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+		role, ok := session.Values["role"].(string)
+		if !ok || (role != "admin" && role != "superadmin") {
+			w.Header().Set("HX-Reswap", "innerHTML")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<div class="text-red-500">Admin access required</div>`))
 			return
 		}
-
-		objectID, err := primitive.ObjectIDFromHex(userID)
-		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusInternalServerError)
-			return
-		}
-
-		var user User
-		err = usersCollection.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&user)
-		if err != nil {
-			http.Error(w, "User not found", http.StatusInternalServerError)
-			return
-		}
-
-		if !user.IsAdmin() {
-			http.Error(w, "Unauthorized: Admin access required", http.StatusForbidden)
-			return
-		}
-
-		// Add user to request context
-		ctx := context.WithValue(r.Context(), "user", &user)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }
 
 // Middleware to check if user has superadmin role
 func requireSuperAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "session-name")
-		userID, ok := session.Values["user_id"].(string)
-		if !ok {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
-		objectID, err := primitive.ObjectIDFromHex(userID)
+		session, err := store.Get(r, "session-name")
 		if err != nil {
-			http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+			log.Printf("Session error: %v", err)
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
-		var user User
-		err = usersCollection.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&user)
-		if err != nil {
-			http.Error(w, "User not found", http.StatusInternalServerError)
+		role, ok := session.Values["role"].(string)
+		log.Printf("Checking superadmin access - Role: %s, Expected: %s", role, RoleSuperAdmin)
+
+		if !ok || role != RoleSuperAdmin {
+			w.Header().Set("HX-Reswap", "innerHTML")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<div class="text-red-500">Super Admin access required</div>`))
 			return
 		}
-
-		if !user.IsSuperAdmin() {
-			http.Error(w, "Unauthorized: Super Admin access required", http.StatusForbidden)
-			return
-		}
-
-		// Add user to request context
-		ctx := context.WithValue(r.Context(), "user", &user)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -200,39 +161,40 @@ func main() {
 	}
 
 	// Initialize router
-	mux := goji.NewMux()
+	router := mux.NewRouter()
 
-	// Serve static files
-	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("static")))
-	mux.Handle(pat.Get("/static/*"), staticHandler)
+	// Public routes first
+	router.HandleFunc("/", handleHome).Methods("GET")
+	router.HandleFunc("/login", handleLoginPage).Methods("GET")
+	router.HandleFunc("/login", handleLoginSubmit).Methods("POST")
+	router.HandleFunc("/register", handleRegisterPage).Methods("GET")
+	router.HandleFunc("/register", handleRegisterSubmit).Methods("POST")
 
-	// Public routes
-	mux.Handle(pat.Get("/"), http.HandlerFunc(handleHome))
-	mux.Handle(pat.Get("/login"), http.HandlerFunc(handleLoginPage))
-	mux.Handle(pat.Post("/login"), http.HandlerFunc(handleLogin))
-	mux.Handle(pat.Get("/register"), http.HandlerFunc(handleRegisterPage))
-	mux.Handle(pat.Post("/register"), http.HandlerFunc(handleRegister))
+	router.HandleFunc("/api/message", handleMessage).Methods("GET")
 
-	// User routes (protected)
-	mux.Handle(pat.Get("/dashboard"), requireAuth(http.HandlerFunc(handleDashboard)))
-	mux.Handle(pat.Post("/logout"), requireAuth(http.HandlerFunc(handleLogout)))
-	mux.Handle(pat.Get("/api/message"), requireAuth(http.HandlerFunc(handleMessage)))
-
+	// Protected routes with clear hierarchy
+	// Super Admin routes (most restrictive first)
+	superAdminRouter := router.PathPrefix("/superadmin").Subrouter()
+	superAdminRouter.Use(requireAuth, requireSuperAdmin)
+	superAdminRouter.HandleFunc("/dashboard", handleSuperAdminDashboard).Methods("GET")
+	superAdminRouter.HandleFunc("/users", handleAdminUsers).Methods("GET")
+	superAdminRouter.HandleFunc("/create-user", handleCreateUserSubmit).Methods("POST")
+	superAdminRouter.HandleFunc("/create-user-form", handleCreateUserForm).Methods("GET")
 	// Admin routes
-	mux.Handle(pat.Get("/admin/dashboard"), requireAdmin(http.HandlerFunc(handleAdminDashboard)))
-	mux.Handle(pat.Get("/admin/users"), requireAdmin(http.HandlerFunc(handleAdminUsers)))
-	mux.Handle(pat.Get("/admin/stats"), requireAdmin(http.HandlerFunc(handleAdminStats)))
+	adminRouter := router.PathPrefix("/admin").Subrouter()
+	adminRouter.Use(requireAuth, requireAdmin)
+	adminRouter.HandleFunc("/dashboard", handleAdminDashboard).Methods("GET")
 
-	// Super Admin routes
-	mux.Handle(pat.Get("/superadmin/dashboard"), requireSuperAdmin(http.HandlerFunc(handleSuperAdminDashboard)))
-	mux.Handle(pat.Get("/superadmin/create-admin"), requireSuperAdmin(http.HandlerFunc(handleCreateAdmin)))
-	mux.Handle(pat.Post("/superadmin/create-admin"), requireSuperAdmin(http.HandlerFunc(handleCreateAdminSubmit)))
-	mux.Handle(pat.Get("/superadmin/admins"), requireSuperAdmin(http.HandlerFunc(handleListAdmins)))
-	mux.Handle(pat.Get("/superadmin/system-config"), requireSuperAdmin(http.HandlerFunc(handleSystemConfig)))
-	mux.Handle(pat.Get("/superadmin/logs"), requireSuperAdmin(http.HandlerFunc(handleSystemLogs)))
+	// User routes (least restrictive last)
+	userRouter := router.PathPrefix("").Subrouter()
+	userRouter.Use(requireAuth)
+	userRouter.HandleFunc("/dashboard", handleDashboard).Methods("GET")
 
-	log.Println("Server starting on :3000...")
-	log.Fatal(http.ListenAndServe(":3000", mux))
+	// Add this to your routes in main()
+	router.HandleFunc("/logout", handleLogout).Methods("GET")
+
+	log.Printf("Starting server on :3000")
+	http.ListenAndServe(":3000", router)
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +203,15 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	// Check if user is authenticated
 	if authValue, exists := session.Values["authenticated"]; exists {
 		if isAuthenticated, ok := authValue.(bool); ok && isAuthenticated {
-			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			role, ok := session.Values["role"].(string)
+			log.Printf("Role: %s", role)
+			if ok && role == RoleSuperAdmin {
+				http.Redirect(w, r, "/superadmin/dashboard", http.StatusSeeOther)
+			} else if ok && role == RoleAdmin {
+				http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			}
 			return
 		}
 	}
@@ -259,7 +229,15 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	// Check if user is authenticated
 	if authValue, exists := session.Values["authenticated"]; exists {
 		if isAuthenticated, ok := authValue.(bool); ok && isAuthenticated {
-			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			role, ok := session.Values["role"].(string)
+			log.Printf("Role: %s", role)
+			if ok && role == RoleSuperAdmin {
+				http.Redirect(w, r, "/superadmin/dashboard", http.StatusSeeOther)
+			} else if ok && role == RoleAdmin {
+				http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			}
 			return
 		}
 	}
@@ -289,10 +267,13 @@ func handleRegisterPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleLogin(w http.ResponseWriter, r *http.Request) {
+func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseForm()
 	if err != nil {
-		http.Error(w, "Could not parse form", http.StatusBadRequest)
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("HX-Target", "#error-message")
+		w.WriteHeader(http.StatusUnauthorized)
+		http.Error(w, "Could not parse form", http.StatusUnauthorized)
 		return
 	}
 
@@ -302,31 +283,49 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	var user User
 	err = usersCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(&user)
 	if err != nil {
-		w.Write([]byte(`<div id="login-message" class="text-red-500 mt-2">Invalid email or password</div>`))
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("HX-Target", "#error-message")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`<div class="text-red-500 text-sm mt-2">Invalid email or password</div>`))
 		return
 	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 	if err != nil {
-		w.Write([]byte(`<div id="login-message" class="text-red-500 mt-2">Invalid email or password</div>`))
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("HX-Target", "#error-message")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`<div class="text-red-500 text-sm mt-2">Invalid email or password</div>`))
 		return
 	}
 
-	// Set user as authenticated
+	// Add debug logging
+	log.Printf("User role: %s", user.Role)
+
 	session, _ := store.Get(r, "session-name")
 	session.Values["authenticated"] = true
-	session.Values["user_id"] = user.ID.Hex()
-	session.Save(r, w)
+	session.Values["userID"] = user.ID.Hex()
+	session.Values["role"] = user.Role
+
+	// Add debug logging
+	log.Printf("Session values: %+v", session.Values)
+
+	if err := session.Save(r, w); err != nil {
+		log.Printf("Error saving session: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
 	// Return HTMX response
-	w.Header().Set("HX-Redirect", "/dashboard")
-	w.Write([]byte(`<div id="login-message" class="text-green-500 mt-2">Login successful! Redirecting...</div>`))
+	w.Header().Set("HX-Redirect", "/"+user.Role+"/dashboard")
+	w.Write([]byte(`<div id="login-message" class="text-green-50 p-4 rounded-lg mt-2">Login successful! Redirecting...</div>`))
 }
 
-func handleRegister(w http.ResponseWriter, r *http.Request) {
+func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseForm()
 	if err != nil {
-		http.Error(w, "Could not parse form", http.StatusBadRequest)
+		w.Header().Set("HX-Reswap", "innerHTML")
+		http.Error(w, "Could not parse form", http.StatusUnauthorized)
 		return
 	}
 
@@ -371,20 +370,19 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
-	userID, ok := session.Values["user_id"].(string)
+	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-
-	objectID, err := primitive.ObjectIDFromHex(userID)
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
 		return
 	}
 
 	var user User
-	err = usersCollection.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&user)
+	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		http.Error(w, "User not found", http.StatusInternalServerError)
 		return
@@ -397,14 +395,23 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Logout handler function
 func handleLogout(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
-	session.Values["authenticated"] = false
-	session.Values["user_id"] = nil
-	session.Save(r, w)
 
-	w.Header().Set("HX-Redirect", "/login")
-	w.Write([]byte(`<div class="text-green-500">Logged out successfully! Redirecting...</div>`))
+	// Clear all session values
+	session.Values = map[interface{}]interface{}{}
+	session.Options.MaxAge = -1 // This will expire the cookie immediately
+
+	err := session.Save(r, w)
+	if err != nil {
+		log.Printf("Error saving session: %v", err)
+		http.Error(w, "Error logging out", http.StatusInternalServerError)
+		return
+	}
+
+	// Redirect to home page
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func handleMessage(w http.ResponseWriter, r *http.Request) {
@@ -415,27 +422,47 @@ func handleMessage(w http.ResponseWriter, r *http.Request) {
 
 // Admin handlers
 func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value("user").(*User)
+	session, _ := store.Get(r, "session-name")
 
-	// Get user count
-	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
-	if err != nil {
-		http.Error(w, "Error getting user count", http.StatusInternalServerError)
+	userIDStr, ok := session.Values["userID"].(string)
+	if !ok {
+		http.Error(w, "User not found in session", http.StatusUnauthorized)
 		return
 	}
 
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+
+	var user User
+	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+
+	// Get counts for dashboard
+	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		log.Printf("Error counting users: %v", err)
+		userCount = 0
+	}
+
 	data := struct {
+		User      User
 		UserCount int64
 	}{
+		User:      user,
 		UserCount: userCount,
 	}
 
-	err = renderTemplate(w, "admin-dashboard.html", struct {
-		*User
-		Data interface{}
-	}{user, data})
+	err = templates.ExecuteTemplate(w, "layout.html", data)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Error rendering dashboard", http.StatusInternalServerError)
 		return
 	}
 }
@@ -516,10 +543,57 @@ func handleAdminStats(w http.ResponseWriter, r *http.Request) {
 
 // Super Admin handlers
 func handleSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value("user").(*User)
-	err := renderTemplate(w, "superadmin-dashboard.html", user)
+	session, _ := store.Get(r, "session-name")
+
+	userIDStr, ok := session.Values["userID"].(string)
+	if !ok {
+		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+
+	var user User
+	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+	if err != nil {
+		log.Printf("Error finding user: %v", err)
+		http.Error(w, "Error finding user", http.StatusInternalServerError)
+		return
+	}
+
+	// Get counts for dashboard
+	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		log.Printf("Error counting users: %v", err)
+		userCount = 0
+	}
+
+	adminCount, err := usersCollection.CountDocuments(context.Background(), bson.M{
+		"role": bson.M{"$in": []string{"admin", "superadmin"}},
+	})
+	if err != nil {
+		log.Printf("Error counting admins: %v", err)
+		adminCount = 0
+	}
+
+	data := struct {
+		User       User
+		UserCount  int64
+		AdminCount int64
+	}{
+		User:       user,
+		UserCount:  userCount,
+		AdminCount: adminCount,
+	}
+
+	err = templates.ExecuteTemplate(w, "layout.html", data)
+	if err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Error rendering dashboard", http.StatusInternalServerError)
 		return
 	}
 }
@@ -551,15 +625,17 @@ func handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(html))
 }
 
-func handleCreateAdminSubmit(w http.ResponseWriter, r *http.Request) {
+func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseForm()
 	if err != nil {
-		http.Error(w, "Could not parse form", http.StatusBadRequest)
+		w.Header().Set("HX-Reswap", "innerHTML")
+		http.Error(w, "Could not parse form", http.StatusUnauthorized)
 		return
 	}
 
 	name := r.FormValue("name")
 	email := r.FormValue("email")
+	role := r.FormValue("role")
 	password := r.FormValue("password")
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -572,7 +648,7 @@ func handleCreateAdminSubmit(w http.ResponseWriter, r *http.Request) {
 		Name:      name,
 		Email:     email,
 		Password:  string(hashedPassword),
-		Role:      RoleAdmin,
+		Role:      role,
 		CreatedAt: time.Now(),
 	}
 
@@ -585,63 +661,60 @@ func handleCreateAdminSubmit(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<div class="text-red-500 mt-2">Could not create admin</div>`))
 		return
 	}
-
-	w.Write([]byte(`<div class="text-green-500 mt-2">Admin created successfully!</div>`))
+	w.Header().Set("HX-Trigger", `{"closeModal": true}`)
+	w.Write([]byte(`<div class="bg-green-500 mt-2">Admin created successfully!</div>`))
 }
 
 func handleListAdmins(w http.ResponseWriter, r *http.Request) {
+	// Get all admin users from database
 	cursor, err := usersCollection.Find(context.Background(), bson.M{
-		"role": bson.M{"$in": []string{RoleAdmin, RoleSuperAdmin}},
+		"role": bson.M{
+			"$in": []string{"admin", "superadmin"},
+		},
 	})
 	if err != nil {
-		http.Error(w, "Error fetching admins", http.StatusInternalServerError)
+		log.Printf("Error finding admins: %v", err)
+		http.Error(w, "Error retrieving admin list", http.StatusInternalServerError)
 		return
 	}
 	defer cursor.Close(context.Background())
 
 	var admins []User
 	if err = cursor.All(context.Background(), &admins); err != nil {
-		http.Error(w, "Error decoding admins", http.StatusInternalServerError)
+		log.Printf("Error decoding admins: %v", err)
+		http.Error(w, "Error processing admin list", http.StatusInternalServerError)
 		return
 	}
 
-	html := `<table class="min-w-full divide-y divide-gray-200">
-		<thead class="bg-gray-50">
-			<tr>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created At</th>
-			</tr>
-		</thead>
-		<tbody class="bg-white divide-y divide-gray-200">`
-
-	for _, admin := range admins {
-		html += `<tr>
-			<td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">` + admin.Name + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + admin.Email + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + admin.Role + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + admin.CreatedAt.Format("2006-01-02 15:04:05") + `</td>
-		</tr>`
+	// Render template with admin list
+	err = templates.ExecuteTemplate(w, "admin-list.html", admins)
+	if err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Error rendering admin list", http.StatusInternalServerError)
+		return
 	}
-
-	html += `</tbody></table>`
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
 }
 
-func handleSystemConfig(w http.ResponseWriter, r *http.Request) {
-	html := `<div class="space-y-4">
-		<div class="text-sm text-gray-500">System configuration coming soon...</div>
-	</div>`
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+// Add this new handler for the modal form
+func handleCreateUserForm(w http.ResponseWriter, r *http.Request) {
+	err := templates.ExecuteTemplate(w, "create-user-modal.html", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
-func handleSystemLogs(w http.ResponseWriter, r *http.Request) {
-	html := `<div class="space-y-4">
-		<div class="text-sm text-gray-500">System logs coming soon...</div>
-	</div>`
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+// Handle the form submission
+func handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	// ... your existing user creation logic ...
+
+	// After successful creation, return a success message
+	w.Header().Set("HX-Trigger", "userCreated")
+	w.Write([]byte(`
+		<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
+			 role="alert"
+			 _="on load wait 3s then remove me">
+			User created successfully!
+		</div>
+	`))
 }
