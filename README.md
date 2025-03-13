@@ -1,32 +1,24 @@
-# HTMX + Go Web Application
+# Go Web Authentication System
 
-A modern web application built with Go, HTMX, and MongoDB, featuring user authentication and session management.
+A web authentication system built with Go, featuring role-based access control, HTMX for dynamic interactions, and MongoDB for data storage.
 
 ## Features
 
-- User Authentication
-  - Login and Registration
-  - Session Management using Gorilla Sessions
-  - Secure Password Hashing with bcrypt
-
-- Modern UI
-  - Built with Tailwind CSS
-  - Responsive Design
-  - Dynamic Content Updates with HTMX
-
-- Database Integration
-  - MongoDB for data storage
-  - Email uniqueness validation
-  - Structured data models
+- User Authentication (Login/Register)
+- Role-Based Access Control (User, Admin, SuperAdmin)
+- HTMX Integration for Dynamic UI
+- MongoDB Integration
+- Session Management
+- Responsive Design with Tailwind CSS
 
 ## Tech Stack
 
-- Backend: Go (Golang)
-- Frontend: HTMX + Tailwind CSS
-- Database: MongoDB
-- Routing: Goji
-- Session Management: Gorilla Sessions
-- Password Hashing: bcrypt
+- Go (Backend)
+- HTMX (Dynamic UI)
+- MongoDB (Database)
+- Tailwind CSS (Styling)
+- Gorilla Mux (Router)
+- Gorilla Sessions (Session Management)
 
 ## Project Structure
 
