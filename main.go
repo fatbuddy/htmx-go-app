@@ -60,7 +60,7 @@ type TemplateData struct {
 
 func init() {
 	// Initialize templates
-	templates = template.Must(template.ParseGlob("templates/*.html"))
+	// templates = template.Must(template.ParseGlob("templates/*.html"))
 	// Initialize session store with a secure key (replace with your own in production)
 	store = sessions.NewCookieStore([]byte("your-secret-key"))
 }
@@ -180,13 +180,18 @@ func main() {
 	superAdminRouter.HandleFunc("/users", handleAdminUsers).Methods("GET")
 	superAdminRouter.HandleFunc("/create-user", handleCreateUserSubmit).Methods("POST")
 	superAdminRouter.HandleFunc("/create-user-form", handleCreateUserForm).Methods("GET")
+
 	// Admin routes
 	adminRouter := router.PathPrefix("/admin").Subrouter()
 	adminRouter.Use(requireAuth, requireAdmin)
 	adminRouter.HandleFunc("/dashboard", handleAdminDashboard).Methods("GET")
+	adminRouter.HandleFunc("/create-user", handleCreateUserSubmit).Methods("POST")
+	adminRouter.HandleFunc("/create-user-form", handleCreateUserForm).Methods("GET")
+	adminRouter.HandleFunc("/stats", handleAdminStats).Methods("GET")
+	adminRouter.HandleFunc("/users", handleAdminUsers).Methods("GET")
 
 	// User routes (least restrictive last)
-	userRouter := router.PathPrefix("").Subrouter()
+	userRouter := router.PathPrefix("/user").Subrouter()
 	userRouter.Use(requireAuth)
 	userRouter.HandleFunc("/dashboard", handleDashboard).Methods("GET")
 
@@ -204,19 +209,22 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	if authValue, exists := session.Values["authenticated"]; exists {
 		if isAuthenticated, ok := authValue.(bool); ok && isAuthenticated {
 			role, ok := session.Values["role"].(string)
-			log.Printf("Role: %s", role)
 			if ok && role == RoleSuperAdmin {
 				http.Redirect(w, r, "/superadmin/dashboard", http.StatusSeeOther)
 			} else if ok && role == RoleAdmin {
 				http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
 			} else {
-				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+				http.Redirect(w, r, "/user/dashboard", http.StatusSeeOther)
 			}
 			return
 		}
 	}
 
-	err := renderTemplate(w, "index.html", nil)
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/index.html",
+	))
+	err := templates.ExecuteTemplate(w, "layout.html", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -236,13 +244,17 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 			} else if ok && role == RoleAdmin {
 				http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
 			} else {
-				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+				http.Redirect(w, r, "/user/dashboard", http.StatusSeeOther)
 			}
 			return
 		}
 	}
 
-	err := renderTemplate(w, "login.html", nil)
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/login.html",
+	))
+	err := templates.ExecuteTemplate(w, "layout.html", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -251,11 +263,17 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 func handleRegisterPage(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
+	// get the role from the session
+	role, ok := session.Values["role"].(string)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
 
 	// Check if user is authenticated
 	if authValue, exists := session.Values["authenticated"]; exists {
 		if isAuthenticated, ok := authValue.(bool); ok && isAuthenticated {
-			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			http.Redirect(w, r, "/"+role+"/dashboard", http.StatusSeeOther)
 			return
 		}
 	}
@@ -298,9 +316,6 @@ func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<div class="text-red-500 text-sm mt-2">Invalid email or password</div>`))
 		return
 	}
-
-	// Add debug logging
-	log.Printf("User role: %s", user.Role)
 
 	session, _ := store.Get(r, "session-name")
 	session.Values["authenticated"] = true
@@ -363,12 +378,20 @@ func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	session.Values["user_id"] = result.InsertedID.(primitive.ObjectID).Hex()
 	session.Save(r, w)
 
+	// get the role from the session
+	role, ok := session.Values["role"].(string)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
 	// Return HTMX response
-	w.Header().Set("HX-Redirect", "/dashboard")
+	w.Header().Set("HX-Redirect", "/"+role+"/dashboard")
 	w.Write([]byte(`<div id="register-message" class="text-green-500 mt-2">Registration successful! Redirecting...</div>`))
 }
 
 func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	log.Println("handleDashboard")
 	session, _ := store.Get(r, "session-name")
 	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
@@ -388,7 +411,11 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = renderTemplate(w, "dashboard.html", user)
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/dashboard.html",
+	))
+	err = templates.ExecuteTemplate(w, "layout.html", user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -459,6 +486,11 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		UserCount: userCount,
 	}
 
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/admin-dashboard.html",
+	))
+
 	err = templates.ExecuteTemplate(w, "layout.html", data)
 	if err != nil {
 		log.Printf("Template error: %v", err)
@@ -468,7 +500,8 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	cursor, err := usersCollection.Find(context.Background(), bson.M{})
+	// Get all users only role is user from database
+	cursor, err := usersCollection.Find(context.Background(), bson.M{"role": RoleUser})
 	if err != nil {
 		http.Error(w, "Error fetching users", http.StatusInternalServerError)
 		return
@@ -508,14 +541,15 @@ func handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
+	// count only users with role user
+	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{"role": RoleUser})
 	if err != nil {
 		http.Error(w, "Error getting stats", http.StatusInternalServerError)
 		return
 	}
 
 	adminCount, err := usersCollection.CountDocuments(context.Background(), bson.M{
-		"role": bson.M{"$in": []string{RoleAdmin, RoleSuperAdmin}},
+		"role": bson.M{"$in": []string{RoleAdmin}},
 	})
 	if err != nil {
 		http.Error(w, "Error getting stats", http.StatusInternalServerError)
@@ -590,39 +624,17 @@ func handleSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		AdminCount: adminCount,
 	}
 
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/superadmin-dashboard.html",
+	))
+
 	err = templates.ExecuteTemplate(w, "layout.html", data)
 	if err != nil {
 		log.Printf("Template error: %v", err)
 		http.Error(w, "Error rendering dashboard", http.StatusInternalServerError)
 		return
 	}
-}
-
-func handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
-	html := `<form hx-post="/superadmin/create-admin" hx-swap="outerHTML" class="space-y-4">
-		<div>
-			<label class="block text-sm font-medium text-gray-700">Name</label>
-			<input type="text" name="name" required
-				class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-		</div>
-		<div>
-			<label class="block text-sm font-medium text-gray-700">Email</label>
-			<input type="email" name="email" required
-				class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-		</div>
-		<div>
-			<label class="block text-sm font-medium text-gray-700">Password</label>
-			<input type="password" name="password" required
-				class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-		</div>
-		<button type="submit"
-			class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-			Create Admin
-		</button>
-	</form>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
 }
 
 func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
@@ -638,13 +650,41 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	role := r.FormValue("role")
 	password := r.FormValue("password")
 
+	// Check if role is valid, superadmin should be able to create admin and user, admin should be able to create user
+	if role != RoleAdmin && role != RoleUser {
+		w.Write([]byte(`<div class="text-red-500 mt-2">Invalid role</div>`))
+		return
+	}
+	session, _ := store.Get(r, "session-name")
+	userIDStr, ok := session.Values["userID"].(string)
+	if !ok {
+		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		return
+	}
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+	user := User{}
+	err1 := usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+	if err1 != nil {
+		http.Error(w, "User not found", http.StatusInternalServerError)
+		return
+	}
+
+	if user.IsAdmin() && (role == RoleAdmin || role == RoleSuperAdmin) {
+		w.Write([]byte(`<div class="text-red-500 mt-2">Invalid role</div>`))
+		return
+	}
+
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		w.Write([]byte(`<div class="text-red-500 mt-2">Server error occurred</div>`))
 		return
 	}
 
-	user := User{
+	newUser := User{
 		Name:      name,
 		Email:     email,
 		Password:  string(hashedPassword),
@@ -652,7 +692,7 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 	}
 
-	_, err = usersCollection.InsertOne(context.Background(), user)
+	_, err = usersCollection.InsertOne(context.Background(), newUser)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			w.Write([]byte(`<div class="text-red-500 mt-2">Email already exists</div>`))
@@ -697,7 +737,46 @@ func handleListAdmins(w http.ResponseWriter, r *http.Request) {
 
 // Add this new handler for the modal form
 func handleCreateUserForm(w http.ResponseWriter, r *http.Request) {
-	err := templates.ExecuteTemplate(w, "create-user-modal.html", nil)
+	session, _ := store.Get(r, "session-name")
+
+	userIDStr, ok := session.Values["userID"].(string)
+	if !ok {
+		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+
+	var user User
+	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		TargetUrl string
+		Roles     []string
+	}{
+		"/admin/create-user",
+		[]string{RoleUser},
+	}
+
+	if user.IsSuperAdmin() {
+		data.TargetUrl = "/superadmin/create-user"
+		data.Roles = append(data.Roles, RoleAdmin)
+	}
+
+	templates = template.Must(template.ParseFiles(
+		"templates/create-user-modal.html",
+	))
+
+	err = templates.ExecuteTemplate(w, "create-user-modal.html", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
