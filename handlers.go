@@ -23,7 +23,12 @@ func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}
 		tmplFiles = append(tmplFiles, "templates/layout.html")
 	}
 	tmpl = template.Must(template.ParseFiles(tmplFiles...))
-	err := tmpl.ExecuteTemplate(w, "layout.html", data)
+	var err error
+	if includeLayout {
+		err = tmpl.ExecuteTemplate(w, "layout.html", data)
+	} else {
+		err = tmpl.ExecuteTemplate(w, templateFile, data)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -425,7 +430,7 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.IsAdmin() && (role == RoleAdmin || role == RoleSuperAdmin) {
+	if user.Role == RoleAdmin && (role == RoleAdmin || role == RoleSuperAdmin) {
 		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
 			 hx-trigger="load delay:3s" 
 			 hx-swap="innerHTML"

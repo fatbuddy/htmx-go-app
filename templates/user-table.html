@@ -14,7 +14,18 @@
         <tr id="user-{{.ID.Hex}}">
             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{.Name}}</td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.Email}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.Role}}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <span class="px-2 py-1 text-sm rounded-full 
+                    {{if eq .Role "superadmin"}}
+                        bg-purple-100 text-purple-800
+                    {{else if eq .Role "admin"}}
+                        bg-blue-100 text-blue-800
+                    {{else}}
+                        bg-gray-100 text-gray-800
+                    {{end}}">
+                    {{.Role}}
+                </span>
+            </td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 <button 
