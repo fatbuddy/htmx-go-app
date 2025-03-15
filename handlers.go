@@ -431,7 +431,7 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// Check if role is valid, superadmin should be able to create admin and user, admin should be able to create user
 	if role != RoleAdmin && role != RoleUser {
-		w.Write([]byte(`<div class="text-red-500 mt-2">Invalid role</div>`))
+		displayNotificationMessage(w, "error", "Invalid role")
 		return
 	}
 	session, _ := store.Get(r, "session-name")

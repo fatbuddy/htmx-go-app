@@ -1,39 +1,60 @@
-# Go Web Authentication System
+# Go Authentication System
 
-A web authentication system built with Go, featuring role-based access control, HTMX for dynamic interactions, and MongoDB for data storage.
+A modern web application demonstrating role-based authentication and dynamic user interfaces using Go, HTMX, and MongoDB.
 
 ## Features
 
-- User Authentication (Login/Register)
-- Role-Based Access Control (User, Admin, SuperAdmin)
-- HTMX Integration for Dynamic UI
-- MongoDB Integration
-- Session Management
-- Responsive Design with Tailwind CSS
+### Authentication & Authorization
+- User registration and login
+- Role-based access control (User, Admin, SuperAdmin)
+- Secure session management
+- Protected routes based on user roles
+
+### User Management
+- User creation (Admin/SuperAdmin)
+- User listing with dynamic updates
+- User deletion with instant UI updates
+- Role-specific dashboards
+
+### Technical Features
+- HTMX for dynamic interactions without JavaScript
+- MongoDB integration for data persistence
+- Secure password hashing
+- Responsive UI with Tailwind CSS
+- Session-based authentication
 
 ## Tech Stack
 
-- Go (Backend)
-- HTMX (Dynamic UI)
-- MongoDB (Database)
-- Tailwind CSS (Styling)
-- Gorilla Mux (Router)
-- Gorilla Sessions (Session Management)
+- **Backend**: Go 1.21+
+- **Database**: MongoDB
+- **Frontend**: 
+  - HTMX for dynamic interactions
+  - Tailwind CSS for styling
+- **Libraries**:
+  - gorilla/mux: Router
+  - gorilla/sessions: Session management
+  - mongo-driver: MongoDB driver
+  - bcrypt: Password hashing
 
 ## Project Structure
 
 ```
 .
-├── main.go           # Main application file
-├── go.mod           # Go module file
-├── go.sum           # Go module checksum
-├── static/          # Static assets
-└── templates/       # HTML templates
-    ├── layout.html  # Base layout template
-    ├── index.html   # Home page
-    ├── login.html   # Login page
+├── main.go # Main application file with router setup and template helpers
+├── handlers.go # All HTTP handlers
+├── middleware.go # Authentication and authorization middleware
+├── models.go # Data models and database operations
+├── go.mod # Go module file
+├── go.sum # Go module checksum
+└── templates/ # HTML templates
+    ├── layout.html # Base layout template
+    ├── login.html # Login page
     ├── register.html # Registration page
-    └── dashboard.html # User dashboard
+    ├── dashboard.html # User dashboard
+    ├── admin-dashboard.html # Admin dashboard
+    ├── superadmin-dashboard.html # Super Admin dashboard
+    ├── user-table.html # User list table partial
+    └── create-user-modal.html # Create user modal form
 ```
 
 ## Prerequisites
