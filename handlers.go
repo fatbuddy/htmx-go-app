@@ -34,6 +34,30 @@ func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}
 	}
 }
 
+// displayErrorMessage is a helper function to display an error message
+func displayNotificationMessage(w http.ResponseWriter, t string, message string) {
+	// type can be success, error, warning, info
+	var color string
+	switch t {
+	case "success":
+		color = "green"
+	case "error":
+		color = "red"
+	case "warning":
+		color = "yellow"
+	case "info":
+		color = "blue"
+	}
+	w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-` + color + `-100 border-l-4 border-` + color + `-500 text-` + color + `-700 p-4" 
+				 role="alert">` + message + `</div>
+		</div>`))
+}
+
 func handleHome(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
 
@@ -97,7 +121,7 @@ func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HX-Reswap", "innerHTML")
 		w.Header().Set("HX-Target", "#error-message")
 		w.WriteHeader(http.StatusUnauthorized)
-		http.Error(w, "Could not parse form", http.StatusUnauthorized)
+		displayNotificationMessage(w, "error", "Could not parse form")
 		return
 	}
 
@@ -110,7 +134,7 @@ func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HX-Reswap", "innerHTML")
 		w.Header().Set("HX-Target", "#error-message")
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`<div class="text-red-500 text-sm mt-2">Invalid email or password</div>`))
+		displayNotificationMessage(w, "error", "Invalid email or password")
 		return
 	}
 
@@ -119,7 +143,7 @@ func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HX-Reswap", "innerHTML")
 		w.Header().Set("HX-Target", "#error-message")
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`<div class="text-red-500 text-sm mt-2">Invalid email or password</div>`))
+		displayNotificationMessage(w, "error", "Invalid email or password")
 		return
 	}
 
@@ -156,7 +180,7 @@ func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		w.Write([]byte(`<div id="register-message" class="text-red-500 mt-2">Server error occurred</div>`))
+		displayNotificationMessage(w, "error", "Server error occurred")
 		return
 	}
 
@@ -172,12 +196,10 @@ func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	// if there is error, return the error message and http code 400
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`<div id="register-message" class="text-red-500 mt-2">Email already exists</div>`))
+			displayNotificationMessage(w, "error", "Email already exists")
 			return
 		}
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`<div id="register-message" class="text-red-500 mt-2">Could not create user</div>`))
+		displayNotificationMessage(w, "error", "Could not create user")
 		return
 	}
 
@@ -203,14 +225,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
 	var user User
 	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
-		http.Error(w, "User not found", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "User not found")
 		return
 	}
 
@@ -239,7 +261,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 func handleMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	message := "Hello from the server! Current time: " + time.Now().Format("15:04:05")
-	w.Write([]byte(`<div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4">` + message + `</div>`))
+	displayNotificationMessage(w, "info", message)
 }
 
 // Admin handlers
@@ -248,13 +270,13 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
-		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		displayNotificationMessage(w, "error", "User not found in session")
 		return
 	}
 
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -262,7 +284,7 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -288,14 +310,14 @@ func handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	// Get all users only role is user from database
 	cursor, err := usersCollection.Find(context.Background(), bson.M{"role": bson.M{"$in": []string{RoleUser}}})
 	if err != nil {
-		http.Error(w, "Error fetching users", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error fetching users")
 		return
 	}
 	defer cursor.Close(context.Background())
 
 	var users []User
 	if err = cursor.All(context.Background(), &users); err != nil {
-		http.Error(w, "Error decoding users", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error decoding users")
 		return
 	}
 
@@ -307,7 +329,7 @@ func handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	// count only users with role user
 	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{"role": RoleUser})
 	if err != nil {
-		http.Error(w, "Error getting stats", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error getting stats")
 		return
 	}
 
@@ -315,7 +337,7 @@ func handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		"role": bson.M{"$in": []string{RoleAdmin}},
 	})
 	if err != nil {
-		http.Error(w, "Error getting stats", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error getting stats")
 		return
 	}
 
@@ -344,13 +366,13 @@ func handleSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
-		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		displayNotificationMessage(w, "error", "User not found in session")
 		return
 	}
 
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -358,7 +380,7 @@ func handleSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		log.Printf("Error finding user: %v", err)
-		http.Error(w, "Error finding user", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error finding user")
 		return
 	}
 
@@ -415,44 +437,29 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
 	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
-		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		displayNotificationMessage(w, "error", "User not found in session")
 		return
 	}
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 	user := User{}
 	err1 := usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 	if err1 != nil {
-		http.Error(w, "User not found", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "User not found")
 		return
 	}
 
 	if user.Role == RoleAdmin && (role == RoleAdmin || role == RoleSuperAdmin) {
-		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">Invalid role</div>
-		</div>`))
+		displayNotificationMessage(w, "error", "Invalid role")
 		return
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		// output to notification id
-		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">Server error occurred</div>
-		</div>`))
+		displayNotificationMessage(w, "error", "Could not create user")
 		return
 	}
 
@@ -467,24 +474,10 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	_, err = usersCollection.InsertOne(context.Background(), newUser)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">Email already exists</div>
-		</div>`))
+			displayNotificationMessage(w, "error", "Email already exists")
 			return
 		}
-		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">Could not create admin</div>
-		</div>`))
+		displayNotificationMessage(w, "error", "Could not create admin")
 		return
 	}
 
@@ -496,16 +489,10 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("HX-Trigger-After-Swap", `{"closeModal": true}`)
+	displayNotificationMessage(w, "success", "Admin created successfully!")
 	w.Write([]byte(`
 		<p hx-swap-oob="true" id="user-count" class="text-2xl text-blue-600">` + fmt.Sprint(userCount) + `</p>
-		<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">Admin created successfully!</div>
-		</div>`))
+	`))
 }
 
 func handleListAdmins(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +504,7 @@ func handleListAdmins(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Printf("Error finding admins: %v", err)
-		http.Error(w, "Error retrieving admin list", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error retrieving admin list")
 		return
 	}
 	defer cursor.Close(context.Background())
@@ -525,7 +512,7 @@ func handleListAdmins(w http.ResponseWriter, r *http.Request) {
 	var admins []User
 	if err = cursor.All(context.Background(), &admins); err != nil {
 		log.Printf("Error decoding admins: %v", err)
-		http.Error(w, "Error processing admin list", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error processing admin list")
 		return
 	}
 
@@ -539,13 +526,13 @@ func handleCreateUserForm(w http.ResponseWriter, r *http.Request) {
 
 	userIDStr, ok := session.Values["userID"].(string)
 	if !ok {
-		http.Error(w, "User not found in session", http.StatusUnauthorized)
+		displayNotificationMessage(w, "error", "User not found in session")
 		return
 	}
 
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -553,7 +540,7 @@ func handleCreateUserForm(w http.ResponseWriter, r *http.Request) {
 	err = usersCollection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -579,20 +566,14 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// After successful creation, return a success message
 	w.Header().Set("HX-Trigger", "userCreated")
-	w.Write([]byte(`
-		<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
-			 role="alert"
-			 _="on load wait 3s then remove me">
-			User created successfully!
-		</div>
-	`))
+	displayNotificationMessage(w, "success", "User created successfully!")
 }
 
 func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	userID, err := primitive.ObjectIDFromHex(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		displayNotificationMessage(w, "error", "Invalid user ID")
 		return
 	}
 
@@ -600,18 +581,18 @@ func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
 	currentUserID := session.Values["userID"].(string)
 	if currentUserID == vars["id"] {
-		http.Error(w, "Cannot delete your own account", http.StatusBadRequest)
+		displayNotificationMessage(w, "error", "Cannot delete your own account")
 		return
 	}
 
 	result, err := usersCollection.DeleteOne(context.Background(), bson.M{"_id": userID})
 	if err != nil {
-		http.Error(w, "Error deleting user", http.StatusInternalServerError)
+		displayNotificationMessage(w, "error", "Error deleting user")
 		return
 	}
 
 	if result.DeletedCount == 0 {
-		http.Error(w, "User not found", http.StatusNotFound)
+		displayNotificationMessage(w, "error", "User not found")
 		return
 	}
 
@@ -629,17 +610,8 @@ func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`
 		<tr hx-swap-oob="true" id="user-row-` + userID.Hex() + `"></tr>
 	    <p hx-swap-oob="true" id="user-count" class="text-2xl text-blue-600">` + fmt.Sprint(userCount) + `</p>
-		<div hx-swap-oob="true" id="notification" 
-			 hx-trigger="load delay:3s" 
-			 hx-swap="innerHTML"
-			 hx-get="/empty" 
-			 hx-target="this">
-			<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
-				 role="alert">
-				User deleted successfully!
-			</div>
-		</div>
 	`))
+	displayNotificationMessage(w, "success", "User deleted successfully!")
 }
 
 func handleEmpty(w http.ResponseWriter, r *http.Request) {
