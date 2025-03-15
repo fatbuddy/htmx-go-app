@@ -47,7 +47,7 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div class="bg-blue-50 p-4 rounded-lg">
                 <h3 class="font-semibold text-blue-800">Total Users</h3>
-                <p class="text-2xl text-blue-600">{{.UserCount}}</p>
+                <p id="user-count" class="text-2xl text-blue-600">{{.UserCount}}</p>
             </div>
             <div class="bg-green-50 p-4 rounded-lg">
                 <h3 class="font-semibold text-green-800">Total Admins</h3>
@@ -68,7 +68,7 @@
                         <h3 class="font-semibold">Manage Users</h3>
                         <p class="text-sm text-gray-600">View and manage all users</p>
                     </a>
-                    <div id="admin-list"></div>
+                    
                 </div>
                 <div class="block p-4 bg-gray-50 rounded-lg hover:bg-gray-100">
                     <button 
@@ -80,7 +80,7 @@
                 </div>
             </div>
         </div>
-
+        <div id="admin-list"></div>
         <!-- Recent Activity -->
         <div>
             <h2 class="text-xl font-semibold mb-4">Recent Activity</h2>

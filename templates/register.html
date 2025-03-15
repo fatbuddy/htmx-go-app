@@ -6,7 +6,8 @@
                 Create your account
             </h2>
         </div>
-        <form class="mt-8 space-y-6" hx-post="/register" hx-swap="outerHTML">
+        <form class="mt-8 space-y-6" hx-post="/register" hx-swap="innerHTML" hx-target="body" hx-target-error="#register-message">
+            <div id="register-message"></div>
             <div class="rounded-md shadow-sm -space-y-px">
                 <div>
                     <label for="name" class="sr-only">Full name</label>

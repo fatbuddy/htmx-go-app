@@ -62,6 +62,7 @@ func init() {
 	// Initialize templates
 	// templates = template.Must(template.ParseGlob("templates/*.html"))
 	// Initialize session store with a secure key (replace with your own in production)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	store = sessions.NewCookieStore([]byte("your-secret-key"))
 }
 
@@ -171,6 +172,7 @@ func main() {
 	router.HandleFunc("/register", handleRegisterSubmit).Methods("POST")
 
 	router.HandleFunc("/api/message", handleMessage).Methods("GET")
+	router.HandleFunc("/empty", handleEmpty).Methods("GET")
 
 	// Protected routes with clear hierarchy
 	// Super Admin routes (most restrictive first)
@@ -180,7 +182,8 @@ func main() {
 	superAdminRouter.HandleFunc("/users", handleAdminUsers).Methods("GET")
 	superAdminRouter.HandleFunc("/create-user", handleCreateUserSubmit).Methods("POST")
 	superAdminRouter.HandleFunc("/create-user-form", handleCreateUserForm).Methods("GET")
-
+	superAdminRouter.HandleFunc("/users/{id}", handleDeleteUser).Methods("DELETE")
+	superAdminRouter.HandleFunc("/panic", handlePanic).Methods("GET")
 	// Admin routes
 	adminRouter := router.PathPrefix("/admin").Subrouter()
 	adminRouter.Use(requireAuth, requireAdmin)
@@ -264,21 +267,25 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 func handleRegisterPage(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session-name")
 	// get the role from the session
-	role, ok := session.Values["role"].(string)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
 
 	// Check if user is authenticated
 	if authValue, exists := session.Values["authenticated"]; exists {
 		if isAuthenticated, ok := authValue.(bool); ok && isAuthenticated {
+			role, ok := session.Values["role"].(string)
+			if !ok {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
 			http.Redirect(w, r, "/"+role+"/dashboard", http.StatusSeeOther)
 			return
 		}
 	}
 
-	err := renderTemplate(w, "register.html", nil)
+	templates = template.Must(template.ParseFiles(
+		"templates/layout.html",
+		"templates/register.html",
+	))
+	err := templates.ExecuteTemplate(w, "layout.html", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -331,9 +338,8 @@ func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return HTMX response
+	// Redirect to the dashboard
 	w.Header().Set("HX-Redirect", "/"+user.Role+"/dashboard")
-	w.Write([]byte(`<div id="login-message" class="text-green-50 p-4 rounded-lg mt-2">Login successful! Redirecting...</div>`))
 }
 
 func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
@@ -358,16 +364,20 @@ func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	user := User{
 		Name:      name,
 		Email:     email,
+		Role:      RoleUser,
 		Password:  string(hashedPassword),
 		CreatedAt: time.Now(),
 	}
 
 	result, err := usersCollection.InsertOne(context.Background(), user)
+	// if there is error, return the error message and http code 400
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
+			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(`<div id="register-message" class="text-red-500 mt-2">Email already exists</div>`))
 			return
 		}
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`<div id="register-message" class="text-red-500 mt-2">Could not create user</div>`))
 		return
 	}
@@ -375,19 +385,13 @@ func handleRegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	// Set user as authenticated
 	session, _ := store.Get(r, "session-name")
 	session.Values["authenticated"] = true
-	session.Values["user_id"] = result.InsertedID.(primitive.ObjectID).Hex()
+	// get the user id from the result to be string
+	session.Values["userID"] = result.InsertedID.(primitive.ObjectID).Hex()
+	session.Values["role"] = RoleUser
 	session.Save(r, w)
 
-	// get the role from the session
-	role, ok := session.Values["role"].(string)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-
-	// Return HTMX response
-	w.Header().Set("HX-Redirect", "/"+role+"/dashboard")
-	w.Write([]byte(`<div id="register-message" class="text-green-500 mt-2">Registration successful! Redirecting...</div>`))
+	// Redirect to the dashboard
+	w.Header().Set("HX-Redirect", "/"+RoleUser+"/dashboard")
 }
 
 func handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -501,7 +505,7 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	// Get all users only role is user from database
-	cursor, err := usersCollection.Find(context.Background(), bson.M{"role": RoleUser})
+	cursor, err := usersCollection.Find(context.Background(), bson.M{"role": bson.M{"$in": []string{RoleUser}}})
 	if err != nil {
 		http.Error(w, "Error fetching users", http.StatusInternalServerError)
 		return
@@ -514,30 +518,15 @@ func handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return a table of users
-	w.Header().Set("Content-Type", "text/html")
-	html := `<table class="min-w-full divide-y divide-gray-200">
-		<thead class="bg-gray-50">
-			<tr>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-				<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created At</th>
-			</tr>
-		</thead>
-		<tbody class="bg-white divide-y divide-gray-200">`
-
-	for _, user := range users {
-		html += `<tr>
-			<td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">` + user.Name + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + user.Email + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + user.Role + `</td>
-			<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">` + user.CreatedAt.Format("2006-01-02 15:04:05") + `</td>
-		</tr>`
+	// Execute just the user-table template
+	templates = template.Must(template.ParseFiles(
+		"templates/user-table.html",
+	))
+	err = templates.ExecuteTemplate(w, "user-table.html", users)
+	if err != nil {
+		http.Error(w, "Error rendering template", http.StatusInternalServerError)
+		return
 	}
-
-	html += `</tbody></table>`
-	w.Write([]byte(html))
 }
 
 func handleAdminStats(w http.ResponseWriter, r *http.Request) {
@@ -616,10 +605,14 @@ func handleSuperAdminDashboard(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		User       User
+		Role       string
+		Email      string
 		UserCount  int64
 		AdminCount int64
 	}{
 		User:       user,
+		Role:       user.Role,
+		Email:      user.Email,
 		UserCount:  userCount,
 		AdminCount: adminCount,
 	}
@@ -674,13 +667,28 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if user.IsAdmin() && (role == RoleAdmin || role == RoleSuperAdmin) {
-		w.Write([]byte(`<div class="text-red-500 mt-2">Invalid role</div>`))
+		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">Invalid role</div>
+		</div>`))
 		return
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		w.Write([]byte(`<div class="text-red-500 mt-2">Server error occurred</div>`))
+		// output to notification id
+		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">Server error occurred</div>
+		</div>`))
 		return
 	}
 
@@ -695,14 +703,45 @@ func handleCreateUserSubmit(w http.ResponseWriter, r *http.Request) {
 	_, err = usersCollection.InsertOne(context.Background(), newUser)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			w.Write([]byte(`<div class="text-red-500 mt-2">Email already exists</div>`))
+			w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">Email already exists</div>
+		</div>`))
 			return
 		}
-		w.Write([]byte(`<div class="text-red-500 mt-2">Could not create admin</div>`))
+		w.Write([]byte(`<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-red-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">Could not create admin</div>
+		</div>`))
 		return
 	}
-	w.Header().Set("HX-Trigger", `{"closeModal": true}`)
-	w.Write([]byte(`<div class="bg-green-500 mt-2">Admin created successfully!</div>`))
+
+	// update the user count
+	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		log.Printf("Error counting users: %v", err)
+		userCount = 0
+	}
+
+	w.Header().Set("HX-Trigger-After-Swap", `{"closeModal": true}`)
+	w.Write([]byte(`
+		<p hx-swap-oob="true" id="user-count" class="text-2xl text-blue-600">` + fmt.Sprint(userCount) + `</p>
+		<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">Admin created successfully!</div>
+		</div>`))
 }
 
 func handleListAdmins(w http.ResponseWriter, r *http.Request) {
@@ -796,4 +835,78 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 			User created successfully!
 		</div>
 	`))
+}
+
+func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID, err := primitive.ObjectIDFromHex(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	// Don't allow deletion of own account
+	session, _ := store.Get(r, "session-name")
+	currentUserID := session.Values["userID"].(string)
+	if currentUserID == vars["id"] {
+		http.Error(w, "Cannot delete your own account", http.StatusBadRequest)
+		return
+	}
+
+	result, err := usersCollection.DeleteOne(context.Background(), bson.M{"_id": userID})
+	if err != nil {
+		http.Error(w, "Error deleting user", http.StatusInternalServerError)
+		return
+	}
+
+	if result.DeletedCount == 0 {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// update the user count
+	userCount, err := usersCollection.CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		log.Printf("Error counting users: %v", err)
+		userCount = 0
+	}
+
+	// Return empty response to remove the row
+	w.WriteHeader(http.StatusOK)
+	// use multi-swap to remove the row from the table, also display a success message
+	// update the user count
+	w.Write([]byte(`
+		<tr hx-swap-oob="true" id="user-row-` + userID.Hex() + `"></tr>
+	    <p hx-swap-oob="true" id="user-count" class="text-2xl text-blue-600">` + fmt.Sprint(userCount) + `</p>
+		<div hx-swap-oob="true" id="notification" 
+			 hx-trigger="load delay:3s" 
+			 hx-swap="innerHTML"
+			 hx-get="/empty" 
+			 hx-target="this">
+			<div class="fixed bottom-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4" 
+				 role="alert">
+				User deleted successfully!
+			</div>
+		</div>
+	`))
+}
+
+func handleEmpty(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte(""))
+}
+
+func handlePanic(w http.ResponseWriter, r *http.Request) {
+	// use an anonymous function to panic and try to recover it so that the server doesn't crash
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Panic: %v", r)
+
+				// send a 200 message to make sure the server doesn't crash
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("Panic recovered"))
+			}
+		}()
+		panic("test panic")
+	}()
 }

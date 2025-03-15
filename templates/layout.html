@@ -8,6 +8,7 @@
     <!-- <script src="https://unpkg.com/htmx.org@1.9.10"></script> -->
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
     <script src="https://unpkg.com/htmx-ext-response-targets@2.0.2" ></script>
+    <script src="https://unpkg.com/htmx.org/dist/ext/multi-swap.js"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -17,7 +18,7 @@
         });
       </script>
 </head>
-<body hx-ext="response-targets" class="bg-gray-100 min-h-screen">
+<body hx-ext="response-targets,multi-swap" class="bg-gray-100 min-h-screen">
     <nav class="bg-white shadow-lg">
         <div class="max-w-6xl mx-auto px-4">
             <div class="flex justify-between">
@@ -34,6 +35,7 @@
                 <div id="user-info" hx-swap-oob="true" class="flex items-center space-x-4">
                     <div class="flex items-center space-x-3">
                         <!-- User Role Badge -->
+                        {{if .Role}}
                         <span class="px-2 py-1 text-sm rounded-full 
                             {{if eq .Role "superadmin"}}
                                 bg-purple-100 text-purple-800
@@ -44,7 +46,7 @@
                             {{end}}">
                             {{.Role}}
                         </span>
-            
+                        {{end}}
                         <!-- Username -->
                         <span class="text-gray-700">{{.Email}}</span>
             
@@ -60,7 +62,7 @@
         </div>
     </nav>
 
-    <main class="container mx-auto px-4 py-8">
+    <main id="content" class="container mx-auto px-4 py-8">
         {{template "content" .}}
     </main>
 </body>
